@@ -1,0 +1,96 @@
+openapi: 3.0.0
+info:
+  title: Heartbeat V1 API
+  description: API for the Polyglot Project Management Hub.
+  version: 1.0.0
+servers:
+  - url: http://localhost:8080/api/v1
+    description: Local Development Server
+
+paths:
+  /status:
+    get:
+      summary: Get status of all monitored projects
+      responses:
+        '200':
+          description: A list of project heartbeats
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/ProjectStatus'
+        '500':
+          description: Internal Server Error
+
+  /logs/{projectId}:
+    get:
+      summary: Fetch the latest execution logs for a specific project
+      parameters:
+        - name: projectId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Log stream data
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProjectLogs'
+
+components:
+  schemas:
+    ProjectStatus:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+          example: "Portfolio-API"
+        language:
+          type: string
+          example: "Go"
+        status:
+          type: string
+          enum: [HEALTHY, DEGRADED, DOWN]
+        latency_ms:
+          type: integer
+          example: 124
+        last_check:
+          type: string
+          format: date-time
+        endpoint_url:
+          type: string
+          format: uri
+
+    ProjectLogs:
+      type: object
+      properties:
+        projectId:
+          type: string
+        logs:
+          type: array
+          items:
+            type: object
+            properties:
+              timestamp:
+                type: string
+              level:
+                type: string
+                example: "INFO"
+              message:
+                type: string
+                example: "Heartbeat successful - 200 OK"
+
+    Error:
+      type: object
+      properties:
+        code:
+          type: integer
+        message:
+          type: string

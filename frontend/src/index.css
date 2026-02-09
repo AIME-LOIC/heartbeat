@@ -1,8 +1,34 @@
-@import "tailwindcss";
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
 
-/* If you want to keep using your custom config file for now, 
-   add this line at the top instead of the standard directives */
+@keyframes scan {
+  from { transform: translateY(0); }
+  to { transform: translateY(100vh); }
+}
 
 body {
-  @apply bg-black;
+  background-color: black;
+  margin: 0;
+  overflow: hidden;
+}
+
+/* Subtle flicker effect */
+.min-h-screen::after {
+  content: " ";
+  display: block;
+  position: absolute;
+  top: 0; left: 0; bottom: 0; right: 0;
+  background: rgba(18, 16, 16, 0.1);
+  opacity: 0;
+  z-index: 2;
+  pointer-events: none;
+  animation: flicker 0.15s infinite;
+}
+
+@keyframes flicker {
+  0% { opacity: 0.27861; }
+  5% { opacity: 0.34769; }
+  10% { opacity: 0.23604; }
+  100% { opacity: 0.25; }
 }

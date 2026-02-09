@@ -2,55 +2,18 @@
 @tailwind components;
 @tailwind utilities;
 
-body {
-  background-color: #050505;
-  margin: 0;
-  overflow: hidden;
-  color: #0ea5e9;
+@layer base {
+  body {
+    @apply bg-[#030303] text-zinc-400 antialiased selection:bg-blue-500/30;
+  }
 }
 
-/* CRT Scanline Effect */
-.crt-overlay {
-  pointer-events: none;
-  position: fixed;
-  inset: 0;
-  z-index: 50;
-  background: linear-gradient(
-      rgba(18, 16, 16, 0) 50%, 
-      rgba(0, 0, 0, 0.15) 50%), 
-    linear-gradient(
-      90deg, 
-      rgba(255, 0, 0, 0.04), 
-      rgba(0, 255, 0, 0.01), 
-      rgba(0, 0, 255, 0.04)
-    );
-  background-size: 100% 4px, 4px 100%;
-  animation: flicker 0.15s infinite;
-}
+/* Custom subtle scrollbar */
+::-webkit-scrollbar { width: 5px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: #27272a; border-radius: 10px; }
+::-webkit-scrollbar-thumb:hover { background: #3f3f46; }
 
-/* Subtle Screen Flicker */
-@keyframes flicker {
-  0% { opacity: 0.95; }
-  5% { opacity: 0.90; }
-  10% { opacity: 0.95; }
-  15% { opacity: 0.98; }
-  30% { opacity: 0.95; }
-  50% { opacity: 0.92; }
-  80% { opacity: 0.99; }
-  100% { opacity: 0.95; }
-}
-
-/* Custom Scrollbar for the Retro Look */
-::-webkit-scrollbar {
-  width: 8px;
-}
-::-webkit-scrollbar-track {
-  background: #050505;
-}
-::-webkit-scrollbar-thumb {
-  background: #0c4a6e;
-  border-radius: 0px;
-}
-::-webkit-scrollbar-thumb:hover {
-  background: #0ea5e9;
+.glass-card {
+  @apply bg-zinc-900/40 border border-white/5 backdrop-blur-md;
 }

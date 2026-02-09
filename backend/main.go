@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"net/http"
 	"sync"
 	"time"
@@ -8,32 +9,26 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-// Project defines our service monitoring structure
+const (
+	supabaseUrl = "https://qhpfdabvjcgnlvobullq.supabase.co"
+	supabaseKey = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InFocGZkYWJ2amNnbmx2b2J1bGxxIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzA2NDEwMjcsImV4cCI6MjA4NjIxNzAyN30.gsOHmu03U0ZM-3uigkcYBgBzYRYR3O-6q-NYJOIai2s" // Use the 'service_role' key for server access
+)
+
 type Project struct {
-	ID          string  `json:"id"`
-	Name        string  `json:"name"`
-	URL         string  `json:"url"`
-	Language    string  `json:"language"`
-	Status      string  `json:"status"`
-	Latency     int64   `json:"latency"`
-	Uptime      float64 `json:"uptime"`
-	LastChecked string  `json:"lastChecked"`
+	ID          string `json:"id"`
+	Name        string `json:"name"`
+	URL         string `json:"url"`
+	Language    string `json:"language"`
+	Status      string `json:"status"`
+	Latency     int64  `json:"latency"`
+	LastChecked string `json:"last_checked"`
 }
 
-// Global list of projects to monitor
-var projects = []Project{
-	{ID: "1", Name: "Google", URL: "https://www.google.com", Language: "Go", Uptime: 99.9},
-	{ID: "2", Name: "GitHub", URL: "https://github.com", Language: "Python", Uptime: 99.8},
-	{ID: "3", Name: "Local-Vite", URL: "http://localhost:5173", Language: "TypeScript", Uptime: 100.0},
-	{ID: "4", Name: "Invalid-Service", URL: "https://this-will-fail-404.com", Language: "Java", Uptime: 0.0},
-}
-
-// CORSMiddleware allows our React frontend to talk to this API
 func CORSMiddleware() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		c.Writer.Header().Set("Access-Control-Allow-Origin", "*")
 		c.Writer.Header().Set("Access-Control-Allow-Methods", "GET, OPTIONS")
-		c.Writer.Header().Set("Access-Control-Allow-Headers", "Content-Type")
+		c.Writer.Header().Set("Access-Control-Allow-Headers", "Content-Type, apikey, Authorization")
 		if c.Request.Method == "OPTIONS" {
 			c.AbortWithStatus(204)
 			return
@@ -42,54 +37,52 @@ func CORSMiddleware() gin.HandlerFunc {
 	}
 }
 
-// pingService performs the actual HTTP check concurrently
 func pingService(p *Project, wg *sync.WaitGroup) {
 	defer wg.Done()
-
 	start := time.Now()
-	client := http.Client{
-		Timeout: 5 * time.Second,
-	}
-
+	client := http.Client{Timeout: 5 * time.Second}
 	resp, err := client.Get(p.URL)
-	p.Latency = time.Since(start).Milliseconds()
-	p.LastChecked = time.Now().Format("15:04:05")
 
+	p.Latency = time.Since(start).Milliseconds()
 	if err != nil || resp.StatusCode >= 400 {
 		p.Status = "DOWN"
 		p.Latency = 0
 	} else {
 		p.Status = "HEALTHY"
-		if p.Latency > 500 {
-			p.Status = "DEGRADED"
-		}
 	}
 }
 
 func main() {
-	// Create a Gin router with default logging/recovery middleware
 	r := gin.Default()
-
-	// Apply CORS so React can connect
 	r.Use(CORSMiddleware())
 
-	// API Route
 	r.GET("/api/v1/status", func(c *gin.Context) {
-		var wg sync.WaitGroup
-		
-		// Create a fresh copy for the request to avoid data races
-		activeResults := make([]Project, len(projects))
-		copy(activeResults, projects)
+		// 1. Fetch project list from Supabase
+		client := &http.Client{}
+		req, _ := http.NewRequest("GET", supabaseUrl+"/rest/v1/projects?select=*", nil)
+		req.Header.Set("apikey", supabaseKey)
+		req.Header.Set("Authorization", "Bearer "+supabaseKey)
 
-		for i := range activeResults {
-			wg.Add(1)
-			go pingService(&activeResults[i], &wg)
+		resp, err := client.Do(req)
+		if err != nil {
+			c.JSON(500, gin.H{"error": "Cloud Sync Failed"})
+			return
 		}
+		defer resp.Body.Close()
 
+		var projects []Project
+		json.NewDecoder(resp.Body).Decode(&projects)
+
+		// 2. Ping all projects concurrently
+		var wg sync.WaitGroup
+		for i := range projects {
+			wg.Add(1)
+			go pingService(&projects[i], &wg)
+		}
 		wg.Wait()
-		c.JSON(http.StatusOK, activeResults)
+
+		c.JSON(200, projects)
 	})
 
-	// Run on 8080
 	r.Run(":8080")
 }

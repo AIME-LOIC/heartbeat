@@ -2,16 +2,17 @@ package main
 
 import (
 	"net/http"
-	"time"
 	"sync"
+	"time"
 
 	"github.com/gin-gonic/gin"
 )
 
+// Project defines our service monitoring structure
 type Project struct {
 	ID          string  `json:"id"`
 	Name        string  `json:"name"`
-	URL         string  `json:"url"` // The real URL to ping
+	URL         string  `json:"url"`
 	Language    string  `json:"language"`
 	Status      string  `json:"status"`
 	Latency     int64   `json:"latency"`
@@ -21,11 +22,27 @@ type Project struct {
 
 // Global list of projects to monitor
 var projects = []Project{
-	{ID: "1", Name: "Google", URL: "https://www.google.com", Language: "Go"},
-	{ID: "2", Name: "GitHub", URL: "https://github.com", Language: "Python"},
-	{ID: "3", Name: "Invalid-Test", URL: "https://this-should-fail-123.com", Language: "Java"},
+	{ID: "1", Name: "Google", URL: "https://www.google.com", Language: "Go", Uptime: 99.9},
+	{ID: "2", Name: "GitHub", URL: "https://github.com", Language: "Python", Uptime: 99.8},
+	{ID: "3", Name: "Local-Vite", URL: "http://localhost:5173", Language: "TypeScript", Uptime: 100.0},
+	{ID: "4", Name: "Invalid-Service", URL: "https://this-will-fail-404.com", Language: "Java", Uptime: 0.0},
 }
 
+// CORSMiddleware allows our React frontend to talk to this API
+func CORSMiddleware() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		c.Writer.Header().Set("Access-Control-Allow-Origin", "*")
+		c.Writer.Header().Set("Access-Control-Allow-Methods", "GET, OPTIONS")
+		c.Writer.Header().Set("Access-Control-Allow-Headers", "Content-Type")
+		if c.Request.Method == "OPTIONS" {
+			c.AbortWithStatus(204)
+			return
+		}
+		c.Next()
+	}
+}
+
+// pingService performs the actual HTTP check concurrently
 func pingService(p *Project, wg *sync.WaitGroup) {
 	defer wg.Done()
 
@@ -49,20 +66,30 @@ func pingService(p *Project, wg *sync.WaitGroup) {
 	}
 }
 
-func getProjectStatus(c *gin.Context) {
-	var wg sync.WaitGroup
-	
-	// Copy current state to work on fresh pings
-	activeProjects := make([]Project, len(projects))
-	copy(activeProjects, projects)
+func main() {
+	// Create a Gin router with default logging/recovery middleware
+	r := gin.Default()
 
-	for i := range activeProjects {
-		wg.Add(1)
-		go pingService(&activeProjects[i], &wg)
-	}
+	// Apply CORS so React can connect
+	r.Use(CORSMiddleware())
 
-	wg.Wait()
-	c.JSON(http.StatusOK, activeProjects)
+	// API Route
+	r.GET("/api/v1/status", func(c *gin.Context) {
+		var wg sync.WaitGroup
+		
+		// Create a fresh copy for the request to avoid data races
+		activeResults := make([]Project, len(projects))
+		copy(activeResults, projects)
+
+		for i := range activeResults {
+			wg.Add(1)
+			go pingService(&activeResults[i], &wg)
+		}
+
+		wg.Wait()
+		c.JSON(http.StatusOK, activeResults)
+	})
+
+	// Run on 8080
+	r.Run(":8080")
 }
-
-// ... Keep your CORSMiddleware and main() from previous step ...

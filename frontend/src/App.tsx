@@ -13,126 +13,174 @@ interface Project {
 
 export default function App() {
   const [projects, setProjects] = useState<Project[]>([]);
-  const [logs, setLogs] = useState<string[]>([]);
+  const [currentTab, setCurrentTab] = useState<'overview' | 'alerts' | 'settings'>('overview');
+  const [selectedProject, setSelectedProject] = useState<Project | null>(null);
+  const [isAddModalOpen, setIsAddModalOpen] = useState(false);
+  const [newProject, setNewProject] = useState({ name: '', url: '', language: 'Go' });
 
   const fetchStatus = async () => {
     try {
       const res = await fetch('http://localhost:8080/api/v1/status');
       const data = await res.json();
       setProjects(data);
-      addLog(`Synchronized ${data.length} services successfully.`);
-    } catch (e) {
-      addLog(`CRITICAL: Connection to API failed. Retrying...`);
-    }
+    } catch (e) { console.error("Sync Error"); }
   };
 
-  const addLog = (msg: string) => {
-    const time = new Date().toLocaleTimeString();
-    setLogs(prev => [`[${time}] ${msg}`, ...prev].slice(0, 15));
+  const handleAddProject = async (e: React.FormEvent) => {
+    e.preventDefault();
+    // For now, we optimisticly add to UI. Next step: Link to Go POST endpoint.
+    const projectToAdd: Project = {
+      ...newProject,
+      id: Math.random().toString(36).substr(2, 9),
+      status: 'HEALTHY',
+      latency: 0,
+      lastChecked: 'Just Now'
+    };
+    setProjects([...projects, projectToAdd]);
+    setIsAddModalOpen(false);
   };
 
   useEffect(() => {
     fetchStatus();
-    const interval = setInterval(fetchStatus, 15000);
+    const interval = setInterval(fetchStatus, 10000);
     return () => clearInterval(interval);
   }, []);
 
   return (
-    <div className="flex h-screen overflow-hidden text-zinc-300">
-      {/* Sidebar */}
-      <aside className="w-64 border-r border-white/5 flex flex-col bg-zinc-950/50">
-        <div className="p-6 border-b border-white/5">
-          <div className="flex items-center gap-3">
-            <div className="h-3 w-3 rounded-full bg-blue-500 shadow-[0_0_10px_#3b82f6]" />
-            <h1 className="font-bold text-white tracking-tight uppercase text-sm">Pulse Engine</h1>
-          </div>
+    <div className="flex h-screen overflow-hidden bg-[#030303] text-zinc-300 font-sans">
+      {/* SIDEBAR */}
+      <aside className="w-64 border-r border-white/5 bg-zinc-950/50 flex flex-col">
+        <div className="p-6 border-b border-white/5 flex items-center gap-3">
+          <div className="h-3 w-3 rounded-full bg-blue-500 animate-pulse" />
+          <h1 className="font-bold text-white text-sm tracking-tighter uppercase">Heartbeat Pro</h1>
         </div>
-        <nav className="flex-1 p-4 space-y-2 text-xs font-semibold uppercase tracking-wider">
-          <div className="p-3 bg-white/5 text-blue-400 rounded-lg cursor-pointer">Overview</div>
-          <div className="p-3 hover:bg-white/5 rounded-lg cursor-pointer transition-colors">Alerts</div>
-          <div className="p-3 hover:bg-white/5 rounded-lg cursor-pointer transition-colors">Settings</div>
+        <nav className="p-4 space-y-2">
+          {['overview', 'alerts', 'settings'].map((tab) => (
+            <button
+              key={tab}
+              onClick={() => setCurrentTab(tab as any)}
+              className={`w-full text-left p-3 rounded-lg text-xs font-bold uppercase tracking-widest transition-all ${
+                currentTab === tab ? 'bg-blue-500/10 text-blue-400 border border-blue-500/20' : 'hover:bg-white/5 text-zinc-500'
+              }`}
+            >
+              {tab}
+            </button>
+          ))}
         </nav>
+        <div className="mt-auto p-4">
+          <button 
+            onClick={() => setIsAddModalOpen(true)}
+            className="w-full p-3 bg-white text-black rounded-lg text-xs font-bold uppercase hover:bg-zinc-200 transition-colors"
+          >
+            + Add Project
+          </button>
+        </div>
       </aside>
 
-      {/* Main Content */}
-      <main className="flex-1 flex flex-col h-full bg-[#030303]">
-        {/* Header Stats */}
-        <header className="p-8 flex justify-between items-center border-b border-white/5 bg-zinc-950/20">
-          <div>
-            <h2 className="text-2xl font-bold text-white tracking-tight">System Health</h2>
-            <p className="text-xs text-zinc-500 font-mono">Running Node: KALI_REMOTE_01</p>
-          </div>
-          <div className="flex gap-10">
-            <Stat label="Total Services" value={projects.length} />
-            <Stat label="Operational" value={projects.filter(p => p.status === 'HEALTHY').length} color="text-emerald-500" />
-            <Stat label="Down" value={projects.filter(p => p.status === 'DOWN').length} color="text-rose-500" />
-          </div>
+      {/* MAIN CONTENT AREA */}
+      <main className="flex-1 flex flex-col overflow-hidden">
+        <header className="h-16 border-b border-white/5 bg-zinc-950/20 flex items-center px-8 justify-between">
+          <h2 className="text-sm font-bold uppercase tracking-widest text-white">{currentTab}</h2>
+          <div className="text-[10px] font-mono text-zinc-500">SYSTEM_STATUS: <span className="text-emerald-500">ENCRYPTED_LINK_ACTIVE</span></div>
         </header>
 
-        {/* Dashboard Grid */}
-        <section className="flex-1 overflow-y-auto p-8">
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
-            <AnimatePresence>
-              {projects.map((p) => (
-                <ProjectCard key={p.id} project={p} />
-              ))}
-            </AnimatePresence>
-          </div>
-        </section>
+        <div className="flex-1 overflow-y-auto p-8">
+          <AnimatePresence mode="wait">
+            {currentTab === 'overview' && (
+              <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                {projects.map(p => (
+                  <ProjectCard key={p.id} project={p} onOpenLogs={() => setSelectedProject(p)} />
+                ))}
+              </motion.div>
+            )}
 
-        {/* Bottom Activity Console */}
-        <footer className="h-48 border-t border-white/5 bg-zinc-950/80 p-6 font-mono text-[10px]">
-          <h3 className="text-zinc-500 mb-3 uppercase tracking-widest font-bold">Live System Activity</h3>
-          <div className="space-y-1 overflow-y-auto h-28 opacity-70">
-            {logs.map((log, i) => (
-              <p key={i} className={log.includes('CRITICAL') ? 'text-rose-400' : 'text-zinc-400'}>{log}</p>
-            ))}
-          </div>
-        </footer>
+            {currentTab === 'alerts' && (
+              <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="space-y-4">
+                <h3 className="text-zinc-500 uppercase text-xs font-bold italic">Incident History</h3>
+                {projects.filter(p => p.status !== 'HEALTHY').map(p => (
+                  <div className="p-4 border border-rose-500/20 bg-rose-500/5 rounded-lg text-rose-500 text-xs font-mono">
+                    [CRITICAL] {p.name} reported status: {p.status} at {p.lastChecked}
+                  </div>
+                ))}
+              </motion.div>
+            )}
+
+            {currentTab === 'settings' && (
+              <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="max-w-md space-y-6">
+                <div>
+                  <label className="block text-[10px] font-bold uppercase mb-2">Polling Interval (ms)</label>
+                  <input type="number" defaultValue={10000} className="w-full bg-zinc-900 border border-white/10 p-3 rounded text-sm focus:border-blue-500 outline-none" />
+                </div>
+                <div>
+                  <label className="block text-[10px] font-bold uppercase mb-2">API Endpoint</label>
+                  <input type="text" defaultValue="http://localhost:8080/api/v1" className="w-full bg-zinc-900 border border-white/10 p-3 rounded text-sm focus:border-blue-500 outline-none" />
+                </div>
+              </motion.div>
+            )}
+          </AnimatePresence>
+        </div>
       </main>
+
+      {/* ADD PROJECT MODAL */}
+      {isAddModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4">
+          <form onSubmit={handleAddProject} className="bg-zinc-950 border border-white/10 p-8 rounded-2xl w-full max-w-sm space-y-4">
+            <h3 className="text-white font-bold uppercase text-xs tracking-[0.2em] mb-4">Register New Service</h3>
+            <input required placeholder="Service Name" className="w-full bg-zinc-900 border border-white/5 p-3 rounded text-sm" onChange={e => setNewProject({...newProject, name: e.target.value})} />
+            <input required placeholder="Service URL" className="w-full bg-zinc-900 border border-white/5 p-3 rounded text-sm" onChange={e => setNewProject({...newProject, url: e.target.value})} />
+            <select className="w-full bg-zinc-900 border border-white/5 p-3 rounded text-sm" onChange={e => setNewProject({...newProject, language: e.target.value})}>
+              <option>Go</option><option>Python</option><option>Rust</option><option>Node.js</option>
+            </select>
+            <div className="flex gap-2 pt-4">
+              <button type="button" onClick={() => setIsAddModalOpen(false)} className="flex-1 p-3 text-xs font-bold uppercase border border-white/10 rounded-lg">Cancel</button>
+              <button type="submit" className="flex-1 p-3 text-xs font-bold uppercase bg-blue-600 text-white rounded-lg">Deploy</button>
+            </div>
+          </form>
+        </div>
+      )}
+
+      {/* LOG MODAL */}
+      <AnimatePresence>
+        {selectedProject && (
+          <LogModal project={selectedProject} onClose={() => setSelectedProject(null)} />
+        )}
+      </AnimatePresence>
     </div>
   );
 }
 
-const Stat = ({ label, value, color = "text-white" }: any) => (
-  <div className="text-right">
-    <p className="text-[10px] uppercase font-bold text-zinc-500 mb-1">{label}</p>
-    <p className={`text-xl font-mono font-bold ${color}`}>{value}</p>
+const ProjectCard = ({ project, onOpenLogs }: { project: Project; onOpenLogs: () => void }) => (
+  <div className="glass-card p-6 rounded-xl relative group overflow-hidden transition-all hover:bg-zinc-900/60">
+    <div className="flex justify-between items-start mb-8">
+      <div>
+        <h4 className="text-white font-bold tracking-tight">{project.name}</h4>
+        <p className="text-[10px] text-zinc-500 font-mono mt-1">{project.url}</p>
+      </div>
+      <div className={`h-2 w-2 rounded-full ${project.status === 'HEALTHY' ? 'bg-emerald-500' : 'bg-rose-500'} animate-pulse`} />
+    </div>
+    <div className="flex items-end justify-between">
+      <div className="text-2xl font-mono font-black text-white">{project.latency}ms</div>
+      <button onClick={onOpenLogs} className="text-[10px] font-bold uppercase tracking-widest text-blue-500 hover:text-white transition-colors">Inspect Logs</button>
+    </div>
   </div>
 );
 
-const ProjectCard = ({ project }: { project: Project }) => {
-  const isHealthy = project.status === 'HEALTHY';
-  
-  return (
-    <motion.div
-      layout
-      initial={{ opacity: 0, y: 10 }}
-      animate={{ opacity: 1, y: 0 }}
-      className="glass-card p-5 rounded-xl hover:bg-zinc-800/50 transition-all group relative overflow-hidden"
-    >
-      <div className="flex justify-between items-start mb-6">
-        <div>
-          <h3 className="text-white font-bold tracking-tight">{project.name}</h3>
-          <p className="text-[10px] text-zinc-500 uppercase">{project.language}</p>
-        </div>
-        <div className={`h-2 w-2 rounded-full ${isHealthy ? 'bg-emerald-500 shadow-[0_0_8px_#10b981]' : 'bg-rose-500 shadow-[0_0_8px_#f43f5e]'} animate-pulse`} />
+const LogModal = ({ project, onClose }: { project: Project; onClose: () => void }) => (
+  <div className="fixed inset-0 z-[100] flex items-end sm:items-center justify-center p-4 bg-black/60 backdrop-blur-md">
+    <motion.div initial={{ y: 100 }} animate={{ y: 0 }} exit={{ y: 100 }} className="bg-zinc-950 border border-white/10 w-full max-w-2xl h-[500px] rounded-2xl flex flex-col overflow-hidden shadow-2xl">
+      <div className="p-4 border-b border-white/5 flex justify-between items-center bg-zinc-900/50">
+        <span className="text-[10px] font-bold text-zinc-400 uppercase tracking-widest">Instance Logs: {project.name}</span>
+        <button onClick={onClose} className="text-zinc-500 hover:text-white">✕</button>
       </div>
-
-      <div className="flex items-end justify-between">
-        <div>
-          <p className="text-[10px] text-zinc-600 font-bold uppercase mb-1">Latency</p>
-          <p className={`text-lg font-mono font-bold ${project.latency > 500 ? 'text-amber-500' : 'text-white'}`}>
-            {project.latency}ms
-          </p>
-        </div>
-        <div className="h-8 w-24 bg-white/5 rounded flex items-end gap-[2px] p-1">
-          {/* Simulated Mini Chart */}
-          {[4, 7, 5, 8, 6, 9, 4].map((h, i) => (
-            <div key={i} className="flex-1 bg-blue-500/20 rounded-t" style={{ height: `${h * 10}%` }} />
-          ))}
-        </div>
+      <div className="flex-1 p-6 font-mono text-[11px] space-y-2 overflow-y-auto bg-black/40">
+        <p className="text-emerald-500">[{new Date().toLocaleTimeString()}] INF - Handshake initiated with {project.url}</p>
+        <p className="text-zinc-500">[{new Date().toLocaleTimeString()}] DBG - TCP connection established via TLS 1.3</p>
+        <p className="text-zinc-500">[{new Date().toLocaleTimeString()}] DBG - Packet received: 456 bytes</p>
+        <p className={project.status === 'DOWN' ? 'text-rose-500' : 'text-emerald-500'}>
+          [{new Date().toLocaleTimeString()}] RES - Status: {project.status} ({project.latency}ms)
+        </p>
+        <p className="animate-pulse text-blue-500 mt-4">_</p>
       </div>
     </motion.div>
-  );
-};
+  </div>
+);

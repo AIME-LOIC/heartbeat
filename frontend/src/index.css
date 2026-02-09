@@ -1,19 +1,32 @@
-@tailwind base;
-@tailwind components;
-@tailwind utilities;
+@import "tailwindcss";
+
+@theme {
+  --color-zinc-950: #09090b;
+  --color-zinc-900: #18181b;
+  --color-zinc-800: #27272a;
+  --color-zinc-400: #a1a1aa;
+  --color-zinc-300: #d4d4d8;
+  --color-blue-500: #3b82f6;
+  --color-emerald-500: #10b981;
+  --color-rose-500: #f43f5e;
+  --color-amber-500: #f59e0b;
+}
 
 @layer base {
   body {
-    @apply bg-[#030303] text-zinc-400 antialiased selection:bg-blue-500/30;
+    @apply bg-[#030303] text-zinc-400 antialiased;
+    font-feature-settings: "ss01", "ss03", "cv01", "cv11";
   }
+}
+
+/* Glassmorphism Utility */
+.glass-card {
+  background: rgba(24, 24, 27, 0.4);
+  border: 1px solid rgba(255, 255, 255, 0.05);
+  backdrop-filter: blur(12px);
 }
 
 /* Custom subtle scrollbar */
 ::-webkit-scrollbar { width: 5px; }
 ::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb { background: #27272a; border-radius: 10px; }
-::-webkit-scrollbar-thumb:hover { background: #3f3f46; }
-
-.glass-card {
-  @apply bg-zinc-900/40 border border-white/5 backdrop-blur-md;
-}

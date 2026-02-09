@@ -16,7 +16,7 @@ interface Project {
 const LogModal = ({ project, onClose }: { project: Project; onClose: () => void }) => (
   <motion.div 
     initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
-    className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/90 backdrop-blur-sm"
+    className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/90 backdrop-blur-md"
     onClick={onClose}
   >
     <motion.div 
@@ -57,68 +57,95 @@ export default function App() {
       const res = await fetch('http://localhost:8080/api/v1/status');
       const data = await res.json();
       setProjects(data);
-    } catch (e) { console.error("API Offline"); }
+    } catch (e) { 
+        console.error("API Offline - Using Fallback Data");
+        setProjects([
+            { id: "1", name: "Google_Srv", url: "google.com", status: "HEALTHY", latency: 45, language: "Go", lastChecked: "12:00" },
+            { id: "2", name: "Git_Hub_Srv", url: "github.com", status: "HEALTHY", latency: 112, language: "Python", lastChecked: "12:00" },
+            { id: "3", name: "Internal_Node", url: "localhost", status: "DOWN", latency: 0, language: "TypeScript", lastChecked: "12:00" }
+        ]);
+    }
   };
 
-  useEffect(() => { if (isOn) fetchStatus(); }, [isOn]);
+  useEffect(() => { 
+    if (isOn) {
+        fetchStatus();
+        const interval = setInterval(fetchStatus, 10000);
+        return () => clearInterval(interval);
+    } 
+  }, [isOn]);
 
   return (
-    <div className="min-h-screen bg-[#050505] text-sky-500 font-mono overflow-hidden relative">
+    <div className="min-h-screen bg-[#050505] text-sky-500 font-mono relative overflow-hidden">
       
       {/* CRT Scanline Overlay */}
-      <div className="pointer-events-none fixed inset-0 z-50 bg-[linear-gradient(rgba(18,16,16,0)_50%,rgba(0,0,0,0.25)_50%),linear-gradient(90deg,rgba(255,0,0,0.06),rgba(0,255,0,0.02),rgba(0,0,255,0.06))] bg-[length:100%_4px,3px_100%]" />
+      <div className="crt-overlay" />
 
-      {/* Main Container with TV "Power On" Animation */}
-      <AnimatePresence>
-        {isOn ? (
+      <AnimatePresence mode="wait">
+        {!isOn ? (
+          /* --- POWER OFF STATE --- */
           <motion.div 
-            key="screen"
-            initial={{ scaleY: 0.005, scaleX: 0, opacity: 0 }}
-            animate={{ scaleY: 1, scaleX: 1, opacity: 1 }}
-            exit={{ scaleY: 0.005, scaleX: 0, opacity: 0 }}
-            transition={{ duration: 0.4, ease: "easeInOut" }}
-            className="h-screen w-screen p-8 overflow-y-auto"
+            key="off"
+            initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+            className="h-screen w-screen flex flex-col items-center justify-center z-10 relative"
           >
-            <header className="flex justify-between items-center mb-12 border-b border-sky-900 pb-4">
-              <h1 className="text-2xl font-black italic tracking-tighter">PULSE_OS v1.0</h1>
-              <button 
-                onClick={() => setIsOn(false)}
-                className="bg-rose-950 text-rose-500 border border-rose-500 px-4 py-1 text-xs hover:bg-rose-500 hover:text-black transition-all"
-              >
-                SHUTDOWN
-              </button>
-            </header>
-
-            <div className="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-4 gap-6">
-              {projects.map(p => (
-                <div 
-                  key={p.id}
-                  onClick={() => setSelectedProject(p)}
-                  className="border border-sky-900 p-4 bg-sky-500/5 hover:bg-sky-500/20 cursor-pointer group transition-all"
-                >
-                  <div className="flex justify-between items-center mb-4">
-                    <span className="text-[10px] text-sky-700">ID_{p.id}</span>
-                    <div className={`h-2 w-2 rounded-full ${p.status === 'HEALTHY' ? 'bg-emerald-500' : 'bg-rose-500'} animate-pulse`} />
-                  </div>
-                  <h3 className="text-lg font-bold truncate">{p.name}</h3>
-                  <p className="text-[10px] mb-4 text-sky-800">{p.language} // STABLE</p>
-                  <div className="text-right text-xs">
-                    <span className="text-sky-300">{p.latency}ms</span>
-                  </div>
-                </div>
-              ))}
-            </div>
+            <motion.button 
+              whileHover={{ scale: 1.1, boxShadow: "0 0 30px rgba(14,165,233,0.5)" }}
+              whileTap={{ scale: 0.9 }}
+              onClick={() => setIsOn(true)}
+              className="w-24 h-24 rounded-full border-4 border-sky-900 flex items-center justify-center transition-all"
+            >
+              <div className="w-4 h-4 bg-sky-500 rounded-full animate-pulse shadow-[0_0_15px_#0ea5e9]" />
+            </motion.button>
+            <p className="mt-6 text-[12px] tracking-[0.5em] text-sky-800 uppercase font-black">
+              Click_To_Boot
+            </p>
           </motion.div>
         ) : (
+          /* --- POWER ON STATE --- */
           <motion.div 
-            key="off-btn"
-            className="h-screen w-screen flex flex-col items-center justify-center"
+            key="on"
+            initial={{ scaleY: 0.005, scaleX: 0, opacity: 1 }}
+            animate={{ scaleY: 1, scaleX: 1, opacity: 1 }}
+            exit={{ scaleY: 0.005, scaleX: 0, opacity: 0 }}
+            transition={{ duration: 0.5, ease: "circOut" }}
+            className="h-screen w-screen p-8 overflow-y-auto z-10 relative"
           >
-            <div className="w-16 h-16 rounded-full border-2 border-sky-900 flex items-center justify-center cursor-pointer hover:border-sky-400 group transition-all"
-                 onClick={() => setIsOn(true)}>
-              <div className="w-2 h-2 bg-sky-900 group-hover:bg-sky-400 rounded-full" />
+            <div className="max-w-7xl mx-auto">
+              <header className="flex justify-between items-center mb-12 border-b-2 border-sky-900 pb-6">
+                <div>
+                  <h1 className="text-3xl font-black italic tracking-tighter">PULSE_OS_v1.0</h1>
+                  <p className="text-[10px] text-sky-800 uppercase">System_Active // User: Aime</p>
+                </div>
+                <button 
+                  onClick={() => setIsOn(false)}
+                  className="px-6 py-2 border-2 border-rose-900 text-rose-900 hover:bg-rose-900 hover:text-black font-bold text-xs transition-all uppercase"
+                >
+                  Terminate
+                </button>
+              </header>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+                {projects.map(p => (
+                  <motion.div 
+                    key={p.id}
+                    whileHover={{ scale: 1.02, backgroundColor: "rgba(14,165,233,0.1)" }}
+                    onClick={() => setSelectedProject(p)}
+                    className="border-2 border-sky-900 p-6 bg-black cursor-pointer transition-all group relative"
+                  >
+                    <div className="flex justify-between mb-4">
+                      <span className="text-[10px] bg-sky-900 text-black px-2 font-bold italic">NODE_{p.id}</span>
+                      <div className={`h-3 w-3 ${p.status === 'HEALTHY' ? 'bg-emerald-500 shadow-[0_0_10px_#10b981]' : 'bg-rose-600 shadow-[0_0_10px_#e11d48]'} rounded-full animate-pulse`} />
+                    </div>
+                    <h3 className="text-xl font-bold mb-1 uppercase truncate">{p.name}</h3>
+                    <p className="text-[10px] text-sky-800 mb-4">{p.language} // STABLE</p>
+                    <div className="text-right">
+                      <span className="text-2xl font-black">{p.latency}ms</span>
+                    </div>
+                  </motion.div>
+                ))}
+              </div>
             </div>
-            <p className="mt-4 text-[10px] tracking-widest text-sky-900 uppercase">System Offline // Click to Boot</p>
           </motion.div>
         )}
       </AnimatePresence>

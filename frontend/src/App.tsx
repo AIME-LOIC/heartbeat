@@ -1,32 +1,16 @@
 import React, { useState, useEffect } from 'react';
 
 // --- Types & Interfaces ---
-// Defining these early ensures type safety across your polyglot stack.
 interface Project {
   id: string;
   name: string;
+  url: string;
   language: string;
   status: 'HEALTHY' | 'DEGRADED' | 'DOWN';
   latency: number;
   uptime: number;
   lastChecked: string;
-  version: string;
 }
-
-// --- Mock Data: The 10 Hosted Projects ---
-// This represents the 10 languages you plan to monitor.
-const INITIAL_PROJECTS: Project[] = [
-  { id: '1', name: 'Auth-Engine', language: 'Go', status: 'HEALTHY', latency: 42, uptime: 99.99, lastChecked: 'Just now', version: 'v1.0.2' },
-  { id: '2', name: 'Neural-Parser', language: 'Python', status: 'HEALTHY', latency: 156, uptime: 98.50, lastChecked: '2m ago', version: 'v2.4.0' },
-  { id: '3', name: 'Legacy-Portal', language: 'Java', status: 'DEGRADED', latency: 1240, uptime: 92.10, lastChecked: '1m ago', version: 'v0.8.9' },
-  { id: '4', name: 'Realtime-Chat', language: 'Node.js', status: 'DOWN', latency: 0, uptime: 74.20, lastChecked: '5m ago', version: 'v1.1.0' },
-  { id: '5', name: 'Crypto-Vault', language: 'Rust', status: 'HEALTHY', latency: 18, uptime: 100.00, lastChecked: 'Just now', version: 'v3.0.1' },
-  { id: '6', name: 'Query-Optimizer', language: 'C++', status: 'HEALTHY', latency: 8, uptime: 99.95, lastChecked: '30s ago', version: 'v1.4.2' },
-  { id: '7', name: 'Data-Pipeline', language: 'Scala', status: 'HEALTHY', latency: 210, uptime: 99.00, lastChecked: '4m ago', version: 'v2.1.0' },
-  { id: '8', name: 'Worker-Node', language: 'Ruby', status: 'HEALTHY', latency: 85, uptime: 97.80, lastChecked: '1m ago', version: 'v1.0.0' },
-  { id: '9', name: 'Storage-API', language: 'C#', status: 'DEGRADED', latency: 980, uptime: 94.50, lastChecked: 'Just now', version: 'v2.0.5' },
-  { id: '10', name: 'Frontend-BFF', language: 'TypeScript', status: 'HEALTHY', latency: 64, uptime: 99.90, lastChecked: '2m ago', version: 'v4.2.1' },
-];
 
 // --- Sub-Component: ProjectCard ---
 const ProjectCard: React.FC<{ project: Project }> = ({ project }) => {
@@ -46,16 +30,15 @@ const ProjectCard: React.FC<{ project: Project }> = ({ project }) => {
       <div className="flex justify-between items-start mb-6">
         <div>
           <h3 className="text-white font-bold text-lg tracking-tight">{project.name}</h3>
-          <p className="text-zinc-500 text-xs font-mono uppercase mt-1">Runtime: {project.language}</p>
+          <p className="text-zinc-500 text-[10px] font-mono uppercase mt-1 truncate max-w-[150px]">{project.url}</p>
         </div>
         <div className="flex flex-col items-end">
-          <div className={`h-2.5 w-2.5 rounded-full ${styles.color} shadow-[0_0_10px_rgba(0,0,0,0.5)] ${project.status !== 'DOWN' && 'animate-pulse'}`} />
+          <div className={`h-2.5 w-2.5 rounded-full ${styles.color} ${project.status !== 'DOWN' && 'animate-pulse'}`} />
           <span className={`text-[10px] mt-2 font-bold ${styles.text}`}>{project.status}</span>
         </div>
       </div>
 
       <div className="space-y-4">
-        {/* Latency Section */}
         <div>
           <div className="flex justify-between items-center text-xs mb-2">
             <span className="text-zinc-500 uppercase tracking-tighter">Response Time</span>
@@ -63,30 +46,16 @@ const ProjectCard: React.FC<{ project: Project }> = ({ project }) => {
           </div>
           <div className="w-full bg-zinc-900 h-1.5 rounded-full overflow-hidden">
             <div 
-              className={`h-full transition-all duration-1000 ${project.latency > 1000 ? 'bg-rose-500' : 'bg-sky-500'}`}
-              style={{ width: `${Math.min(100, (project.latency / 2000) * 100)}%` }}
+              className={`h-full transition-all duration-700 ${project.latency > 500 ? 'bg-amber-500' : 'bg-sky-500'}`}
+              style={{ width: `${Math.min(100, (project.latency / 1000) * 100)}%` }}
             />
           </div>
         </div>
 
-        {/* Stats Grid */}
-        <div className="grid grid-cols-2 gap-4 pt-4 border-t border-zinc-900">
-          <div>
-            <p className="text-[10px] text-zinc-600 uppercase font-bold">Uptime</p>
-            <p className="text-sm text-zinc-300 font-mono">{project.uptime}%</p>
-          </div>
-          <div className="text-right">
-            <p className="text-[10px] text-zinc-600 uppercase font-bold">Version</p>
-            <p className="text-sm text-zinc-300 font-mono">{project.version}</p>
-          </div>
+        <div className="flex justify-between items-center pt-4 border-t border-zinc-900 text-[10px]">
+            <span className="text-zinc-600 font-bold uppercase tracking-widest">Runtime: {project.language}</span>
+            <span className="text-zinc-500 font-mono italic">Checked: {project.lastChecked}</span>
         </div>
-      </div>
-
-      <div className="mt-4 pt-3 border-t border-zinc-900 flex justify-between items-center">
-        <span className="text-[9px] text-zinc-700 font-mono">ID: {project.id}</span>
-        <button className="text-[10px] text-zinc-500 hover:text-white transition-colors uppercase font-bold tracking-widest">
-          View Logs
-        </button>
       </div>
     </div>
   );
@@ -94,91 +63,104 @@ const ProjectCard: React.FC<{ project: Project }> = ({ project }) => {
 
 // --- Main Application Component ---
 export default function App() {
-  const [projects] = useState<Project[]>(INITIAL_PROJECTS);
+  const [projects, setProjects] = useState<Project[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
   const [currentTime, setCurrentTime] = useState(new Date().toLocaleTimeString());
 
+  // Function to fetch real pings from Go Backend
+  const fetchHeartbeats = async () => {
+    try {
+      const response = await fetch('http://localhost:8080/api/v1/status');
+      if (!response.ok) throw new Error('API_CONNECTION_FAILED');
+      const data = await response.json();
+      setProjects(data);
+      setError(null);
+    } catch (err) {
+      setError("COULD NOT CONNECT TO GO BACKEND. ENSURE SERVER IS RUNNING ON :8080");
+    } finally {
+      setLoading(false);
+    }
+  };
+
   useEffect(() => {
-    const timer = setInterval(() => setCurrentTime(new Date().toLocaleTimeString()), 1000);
-    return () => clearInterval(timer);
+    fetchHeartbeats();
+    const statusTimer = setInterval(fetchHeartbeats, 30000); // Ping every 30s
+    const clockTimer = setInterval(() => setCurrentTime(new Date().toLocaleTimeString()), 1000);
+    
+    return () => {
+      clearInterval(statusTimer);
+      clearInterval(clockTimer);
+    };
   }, []);
 
   return (
-    <div className="min-h-screen bg-black text-zinc-400 selection:bg-sky-500/30">
-      {/* Top Navigation / Header */}
+    <div className="min-h-screen bg-black text-zinc-400 font-sans selection:bg-sky-500/30">
+      {/* Header */}
       <nav className="border-b border-zinc-900 bg-black/50 backdrop-blur-md sticky top-0 z-50">
         <div className="max-w-[1600px] mx-auto px-6 h-16 flex items-center justify-between">
-          <div className="flex items-center gap-4">
-            <div className="h-8 w-8 bg-white rounded flex items-center justify-center">
-              <div className="h-4 w-4 bg-black rotate-45" />
+          <div className="flex items-center gap-3">
+            <div className="h-6 w-6 bg-sky-500 rounded-sm flex items-center justify-center animate-pulse">
+                <div className="h-2 w-2 bg-black rounded-full" />
             </div>
             <h1 className="text-white font-black text-xl tracking-tighter uppercase italic">
-              Pulse <span className="text-sky-500">v1.0</span>
+              PULSE<span className="text-sky-500">_OPS</span>
             </h1>
           </div>
           
           <div className="flex items-center gap-8 font-mono text-[11px] tracking-widest text-zinc-500">
-            <div className="hidden sm:block">
-              NETWORK_STATUS: <span className="text-emerald-500">OPTIMAL</span>
+            <div className="hidden sm:block uppercase">
+              Node: <span className="text-emerald-500">Local_Kali</span>
             </div>
-            <div>
-              SYSTEM_TIME: <span className="text-white">{currentTime}</span>
-            </div>
-            <div className="h-8 w-8 rounded-full bg-zinc-900 border border-zinc-800 flex items-center justify-center text-white cursor-pointer hover:bg-zinc-800">
-              A
+            <div className="uppercase">
+              Time: <span className="text-white">{currentTime}</span>
             </div>
           </div>
         </div>
       </nav>
 
-      {/* Main Content Area */}
+      {/* Main UI */}
       <main className="max-w-[1600px] mx-auto px-6 py-10">
-        <header className="mb-10">
-          <h2 className="text-3xl font-bold text-white mb-2">Service Overview</h2>
-          <p className="text-zinc-500 max-w-2xl">
-            Real-time monitoring across 10 distributed microservices. Data aggregated from 
-            multi-region clusters via Go-backend orchestration and Python-logic triggers.
-          </p>
-        </header>
-
-        {/* Grid System for Project Cards */}
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5 gap-6">
-          {projects.map((project) => (
-            <ProjectCard key={project.id} project={project} />
-          ))}
-        </div>
-
-        {/* Console / Activity Feed (Visual Placeholder) */}
-        <section className="mt-12 bg-zinc-950 border border-zinc-900 rounded-lg overflow-hidden">
-          <div className="bg-zinc-900 px-4 py-2 border-b border-zinc-800 flex justify-between items-center">
-            <span className="text-[10px] font-bold text-zinc-400 uppercase tracking-widest">Global Activity Stream</span>
-            <div className="flex gap-1.5">
-              <div className="w-2 h-2 rounded-full bg-zinc-700" />
-              <div className="w-2 h-2 rounded-full bg-zinc-700" />
-              <div className="w-2 h-2 rounded-full bg-zinc-700" />
+        {error && (
+            <div className="mb-8 p-4 bg-rose-500/10 border border-rose-500/50 rounded-lg flex items-center gap-4 text-rose-500 font-mono text-xs">
+                <span className="font-bold">[SYSTEM_ERROR]</span> {error}
             </div>
-          </div>
-          <div className="p-4 font-mono text-[11px] space-y-2 h-48 overflow-y-auto">
-            <p className="text-emerald-500">[SUCCESS] - Health check passed for Auth-Engine (Go)</p>
-            <p className="text-zinc-600">[INFO] - Retrying connection to Legacy-Portal...</p>
-            <p className="text-rose-500">[ERROR] - Socket timeout on Realtime-Chat (Node.js)</p>
-            <p className="text-sky-500">[DEPLOY] - New version v3.0.1 pushed to Crypto-Vault (Rust)</p>
-            <p className="text-zinc-500">[LOG] - Memory usage at 14% on Neural-Parser (Python)</p>
-          </div>
-        </section>
+        )}
+
+        {loading ? (
+            <div className="h-[60vh] flex flex-col items-center justify-center text-zinc-600 font-mono space-y-4">
+                <div className="w-12 h-1 bg-zinc-800 overflow-hidden rounded-full">
+                    <div className="w-1/2 h-full bg-sky-500 animate-[loading_1s_infinite_linear]" />
+                </div>
+                <p className="text-[10px] tracking-[0.3em] uppercase">Initializing Pings...</p>
+            </div>
+        ) : (
+            <>
+                <div className="mb-10 flex justify-between items-end">
+                    <div>
+                        <h2 className="text-3xl font-bold text-white mb-2">Service Grid</h2>
+                        <p className="text-zinc-500 text-sm">Concurrent health monitoring via Go-routines.</p>
+                    </div>
+                    <button 
+                        onClick={() => {setLoading(true); fetchHeartbeats();}}
+                        className="px-4 py-2 border border-zinc-800 text-[10px] font-bold uppercase tracking-widest hover:bg-white hover:text-black transition-all"
+                    >
+                        Force Refresh
+                    </button>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5 gap-6">
+                    {projects.map((project) => (
+                        <ProjectCard key={project.id} project={project} />
+                    ))}
+                </div>
+            </>
+        )}
       </main>
 
-      {/* Global Footer */}
-      <footer className="border-t border-zinc-900 mt-20 py-10">
-        <div className="max-w-[1600px] mx-auto px-6 flex flex-col md:flex-row justify-between items-center gap-6">
-          <div className="text-xs text-zinc-600">
-            &copy; 2026 Pulse Infrastructure Group. All rights reserved.
-          </div>
-          <div className="flex gap-8 text-[10px] font-bold uppercase tracking-widest text-zinc-500">
-            <a href="#" className="hover:text-white transition-colors">Documentation</a>
-            <a href="#" className="hover:text-white transition-colors">API Status</a>
-            <a href="#" className="hover:text-white transition-colors">Support</a>
-          </div>
-        </div>
+      <footer className="max-w-[1600px] mx-auto px-6 py-20 border-t border-zinc-900 flex justify-between items-center text-zinc-700 font-mono text-[10px]">
+        <p>HEARTBEAT_STABLE // 2026</p>
+        <p>V1.0.0_PRODUCTION</p>
       </footer>
     </div>
   );

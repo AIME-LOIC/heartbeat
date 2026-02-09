@@ -1,0 +1,8 @@
+@import "tailwindcss";
+
+/* If you want to keep using your custom config file for now, 
+   add this line at the top instead of the standard directives */
+
+body {
+  @apply bg-black;
+}

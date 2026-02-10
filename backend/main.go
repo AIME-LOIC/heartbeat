@@ -1,10 +1,13 @@
 package main
 
 import (
+	"crypto/rand"
 	"encoding/json"
+	"encoding/base64"
 	"fmt"
 	"net/http"
 	"os"
+	"net/url"
 	"strconv"
 	"strings"
 	"sync"
@@ -25,9 +28,19 @@ type Config struct {
 	WebhookURL     string
 	SlackWebhookURL   string
 	DiscordWebhookURL string
+
+	ConfirmBaseURL         string
+	ConfirmTokenTTLMinutes int
+	ConfirmTokenSecret     string
+
+	EmailJSServiceID  string
+	EmailJSTemplateID string
+	EmailJSPublicKey  string
+	EmailJSPrivateKey string
 }
 
 func loadConfig() (Config, error) {
+	loadDotEnvIfPresent(".env")
 	cfg := Config{
 		Port:       os.Getenv("PORT"),
 		CORSOrigin: os.Getenv("CORS_ORIGIN"),
@@ -92,7 +105,59 @@ func loadConfig() (Config, error) {
 	cfg.WebhookURL = strings.TrimSpace(os.Getenv("WEBHOOK_URL"))
 	cfg.SlackWebhookURL = strings.TrimSpace(os.Getenv("SLACK_WEBHOOK_URL"))
 	cfg.DiscordWebhookURL = strings.TrimSpace(os.Getenv("DISCORD_WEBHOOK_URL"))
+
+	cfg.ConfirmBaseURL = strings.TrimRight(strings.TrimSpace(os.Getenv("CONFIRM_BASE_URL")), "/")
+	if cfg.ConfirmBaseURL == "" {
+		cfg.ConfirmBaseURL = "http://localhost:5173"
+	}
+	cfg.ConfirmTokenSecret = strings.TrimSpace(os.Getenv("CONFIRM_TOKEN_SECRET"))
+	if cfg.ConfirmTokenSecret == "" {
+		cfg.ConfirmTokenSecret = "dev-only-change-me"
+	}
+	ttlStr := strings.TrimSpace(os.Getenv("CONFIRM_TOKEN_TTL_MINUTES"))
+	if ttlStr == "" {
+		cfg.ConfirmTokenTTLMinutes = 30
+	} else {
+		ttl, err := strconv.Atoi(ttlStr)
+		if err != nil || ttl < 5 || ttl > 24*60 {
+			return Config{}, fmt.Errorf("invalid CONFIRM_TOKEN_TTL_MINUTES")
+		}
+		cfg.ConfirmTokenTTLMinutes = ttl
+	}
+
+	cfg.EmailJSServiceID = strings.TrimSpace(os.Getenv("EMAILJS_SERVICE_ID"))
+	cfg.EmailJSTemplateID = strings.TrimSpace(os.Getenv("EMAILJS_TEMPLATE_ID"))
+	cfg.EmailJSPublicKey = strings.TrimSpace(os.Getenv("EMAILJS_PUBLIC_KEY"))
+	cfg.EmailJSPrivateKey = strings.TrimSpace(os.Getenv("EMAILJS_PRIVATE_KEY"))
 	return cfg, nil
+}
+
+func loadDotEnvIfPresent(path string) {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return
+	}
+	lines := strings.Split(string(b), "\n")
+	for _, line := range lines {
+		l := strings.TrimSpace(line)
+		if l == "" || strings.HasPrefix(l, "#") {
+			continue
+		}
+		parts := strings.SplitN(l, "=", 2)
+		if len(parts) != 2 {
+			continue
+		}
+		key := strings.TrimSpace(parts[0])
+		val := strings.TrimSpace(parts[1])
+		val = strings.Trim(val, `"'`)
+		if key == "" {
+			continue
+		}
+		if _, exists := os.LookupEnv(key); exists {
+			continue
+		}
+		_ = os.Setenv(key, val)
+	}
 }
 
 type Project struct {
@@ -138,12 +203,23 @@ type Store struct {
 	historyByID     map[string][]CheckResult
 	lastStatusByID  map[string]string
 	incidents       []Incident
+
+	confirmTokens   map[string]ConfirmToken
+	confirmedEmails map[string]time.Time
+}
+
+type ConfirmToken struct {
+	Email     string
+	Username  string
+	ExpiresAt time.Time
 }
 
 func NewStore() *Store {
 	return &Store{
 		historyByID:    make(map[string][]CheckResult),
 		lastStatusByID: make(map[string]string),
+		confirmTokens:  make(map[string]ConfirmToken),
+		confirmedEmails: make(map[string]time.Time),
 	}
 }
 
@@ -212,6 +288,82 @@ func (s *Store) getIncidents(limit int) []Incident {
 	out := make([]Incident, limit)
 	copy(out, s.incidents[:limit])
 	return out
+}
+
+func (s *Store) createConfirmToken(email string, username string, ttl time.Duration) (string, time.Time, error) {
+	b := make([]byte, 32)
+	if _, err := rand.Read(b); err != nil {
+		return "", time.Time{}, err
+	}
+	token := base64.RawURLEncoding.EncodeToString(b)
+	expiresAt := time.Now().Add(ttl)
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.confirmTokens[token] = ConfirmToken{Email: email, Username: username, ExpiresAt: expiresAt}
+	return token, expiresAt, nil
+}
+
+func (s *Store) consumeConfirmToken(token string) (ConfirmToken, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	ct, ok := s.confirmTokens[token]
+	if !ok {
+		return ConfirmToken{}, false
+	}
+	if time.Now().After(ct.ExpiresAt) {
+		delete(s.confirmTokens, token)
+		return ConfirmToken{}, false
+	}
+	delete(s.confirmTokens, token)
+	s.confirmedEmails[strings.ToLower(ct.Email)] = time.Now()
+	return ct, true
+}
+
+func (s *Store) isConfirmed(email string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	_, ok := s.confirmedEmails[strings.ToLower(email)]
+	return ok
+}
+
+func sendEmailJSConfirmation(cfg Config, toEmail string, confirmLink string, username string) error {
+	if cfg.EmailJSServiceID == "" || cfg.EmailJSTemplateID == "" || cfg.EmailJSPublicKey == "" {
+		return fmt.Errorf("emailjs is not configured")
+	}
+
+	payload := map[string]any{
+		"service_id":  cfg.EmailJSServiceID,
+		"template_id": cfg.EmailJSTemplateID,
+		"user_id":     cfg.EmailJSPublicKey,
+		"template_params": map[string]string{
+			"to_email":           toEmail,
+			"confirmation_link":  confirmLink,
+			"username":           username,
+		},
+	}
+
+	body, _ := json.Marshal(payload)
+	req, err := http.NewRequest("POST", "https://api.emailjs.com/api/v1.0/email/send", strings.NewReader(string(body)))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	if cfg.EmailJSPrivateKey != "" {
+		// Some EmailJS setups use a private key/bearer token for server-side calls.
+		req.Header.Set("Authorization", "Bearer "+cfg.EmailJSPrivateKey)
+	}
+
+	client := &http.Client{Timeout: 8 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 400 {
+		return fmt.Errorf("emailjs returned status %d", resp.StatusCode)
+	}
+	return nil
 }
 
 func doWebhook(cfg Config, incident Incident) {
@@ -368,6 +520,66 @@ func main() {
 		wg.Wait()
 
 		c.JSON(200, projects)
+	})
+
+	r.POST("/api/v1/auth/send-confirmation", func(c *gin.Context) {
+		var req struct {
+			Email    string `json:"email"`
+			Username string `json:"username"`
+		}
+		if err := c.BindJSON(&req); err != nil {
+			c.JSON(400, gin.H{"error": "invalid json"})
+			return
+		}
+		email := strings.TrimSpace(req.Email)
+		username := strings.TrimSpace(req.Username)
+		if email == "" || !strings.Contains(email, "@") {
+			c.JSON(400, gin.H{"error": "email is required"})
+			return
+		}
+		if store.isConfirmed(email) {
+			c.JSON(200, gin.H{"ok": true, "alreadyConfirmed": true})
+			return
+		}
+
+		ttl := time.Duration(cfg.ConfirmTokenTTLMinutes) * time.Minute
+		token, expiresAt, err := store.createConfirmToken(email, username, ttl)
+		if err != nil {
+			c.JSON(500, gin.H{"error": "could not create token"})
+			return
+		}
+		confirmLink := cfg.ConfirmBaseURL + "/confirm?token=" + url.QueryEscape(token) + "&email=" + url.QueryEscape(email)
+		if username != "" {
+			confirmLink += "&username=" + url.QueryEscape(username)
+		}
+		if err := sendEmailJSConfirmation(cfg, email, confirmLink, username); err != nil {
+			c.JSON(500, gin.H{"error": err.Error()})
+			return
+		}
+		c.JSON(200, gin.H{"ok": true, "expiresAt": expiresAt.UnixMilli()})
+	})
+
+	r.GET("/api/v1/auth/confirm", func(c *gin.Context) {
+		token := strings.TrimSpace(c.Query("token"))
+		if token == "" {
+			c.JSON(400, gin.H{"error": "token is required"})
+			return
+		}
+		ct, ok := store.consumeConfirmToken(token)
+		if !ok {
+			c.JSON(400, gin.H{"ok": false, "error": "invalid or expired token"})
+			return
+		}
+		c.JSON(200, gin.H{"ok": true, "email": ct.Email, "username": ct.Username})
+	})
+
+	r.GET("/api/v1/auth/is-confirmed", func(c *gin.Context) {
+		email := strings.TrimSpace(c.Query("email"))
+		if email == "" {
+			c.JSON(400, gin.H{"error": "email is required"})
+			return
+		}
+		c.JSON(200, gin.H{"ok": true, "confirmed": store.isConfirmed(email)})
 	})
 
 	r.GET("/api/v1/history", func(c *gin.Context) {

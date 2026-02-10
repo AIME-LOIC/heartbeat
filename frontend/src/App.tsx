@@ -5,6 +5,7 @@ import { Activity, Plus, Trash2, Settings, LayoutGrid, AlertCircle, X, Zap, Shie
 import { LineChart, Line } from 'recharts';
 import { apiUrl, supabase } from './config';
 import { decodeProjectId, encodeProjectId } from './encoding';
+import { useSession } from './session';
 
 type ProjectStatus = 'HEALTHY' | 'DEGRADED' | 'DOWN';
 
@@ -36,12 +37,6 @@ function toastId(): string {
   return `${Date.now()}_${Math.random().toString(16).slice(2)}`;
 }
 
-function getUsernameFromEmail(email: string | null | undefined): string | null {
-  if (!email) return null;
-  const prefix = email.split('@')[0]?.trim();
-  return prefix ? prefix : null;
-}
-
 function creditsStorageKeys(userId: string): { sessionKey: string; persistKey: string } {
   return {
     sessionKey: `hb_credits_session:${userId}`,
@@ -66,59 +61,12 @@ function saveCredits(userId: string, credits: number): void {
   localStorage.setItem(persistKey, val);
 }
 
-function usernameStorageKey(userId: string): string {
-  return `hb_username:${userId}`;
-}
-
-function loadUsername(userId: string): string | null {
-  const v = localStorage.getItem(usernameStorageKey(userId));
-  return v?.trim() ? v.trim() : null;
-}
-
-function saveUsername(userId: string, username: string): void {
-  localStorage.setItem(usernameStorageKey(userId), username.trim());
-}
-
 async function ensureNotificationPermission(): Promise<boolean> {
   if (!('Notification' in window)) return false;
   if (Notification.permission === 'granted') return true;
   if (Notification.permission === 'denied') return false;
   const p = await Notification.requestPermission();
   return p === 'granted';
-}
-
-function useSession() {
-  const [userId, setUserId] = useState<string | null>(null);
-  const [userEmail, setUserEmail] = useState<string | null>(null);
-  const [username, setUsername] = useState<string | null>(null);
-
-  useEffect(() => {
-    if (!supabase) return;
-    void supabase.auth.getSession().then(({ data }) => {
-      const session = data.session;
-      const user = session?.user;
-      setUserId(user?.id ?? null);
-      setUserEmail(user?.email ?? null);
-      const metaUsername = (user?.user_metadata as { username?: unknown } | undefined)?.username;
-      const fromMeta = typeof metaUsername === 'string' && metaUsername.trim() ? metaUsername.trim() : null;
-      const fromLocal = user?.id ? loadUsername(user.id) : null;
-      const fromEmail = getUsernameFromEmail(user?.email);
-      setUsername(fromMeta ?? fromLocal ?? fromEmail);
-    });
-    const { data } = supabase.auth.onAuthStateChange((_event, session) => {
-      const user = session?.user;
-      setUserId(user?.id ?? null);
-      setUserEmail(user?.email ?? null);
-      const metaUsername = (user?.user_metadata as { username?: unknown } | undefined)?.username;
-      const fromMeta = typeof metaUsername === 'string' && metaUsername.trim() ? metaUsername.trim() : null;
-      const fromLocal = user?.id ? loadUsername(user.id) : null;
-      const fromEmail = getUsernameFromEmail(user?.email);
-      setUsername(fromMeta ?? fromLocal ?? fromEmail);
-    });
-    return () => data.subscription.unsubscribe();
-  }, []);
-
-  return { userId, userEmail, username, setUsername };
 }
 
 function useToasts() {
@@ -134,14 +82,16 @@ function useToasts() {
 }
 
 function AppIndex() {
-  const { userId, username } = useSession();
+  const { ready, userId, username } = useSession();
+  if (!ready) return null;
   if (!userId) return <AuthPage />;
   if (!username) return <Navigate to="/account/project" replace />;
   return <Navigate to={`/${encodeURIComponent(username)}/project`} replace />;
 }
 
 function RequireAuth({ children }: { children: React.ReactNode }) {
-  const { userId } = useSession();
+  const { ready, userId } = useSession();
+  if (!ready) return null;
   if (!userId) return <Navigate to="/" replace />;
   return <>{children}</>;
 }
@@ -149,20 +99,22 @@ function RequireAuth({ children }: { children: React.ReactNode }) {
 function AuthPage() {
   const nav = useNavigate();
   const { addToast, toasts } = useToasts();
-  const { userId, username } = useSession();
+  const { ready, userId, username } = useSession();
 
   const [mode, setMode] = useState<'signin' | 'signup'>('signin');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [isSendingConfirm, setIsSendingConfirm] = useState(false);
 
   useEffect(() => {
+    if (!ready) return;
     if (!userId) return;
     if (!username) {
       nav('/account/project', { replace: true });
       return;
     }
     nav(`/${encodeURIComponent(username)}/project`, { replace: true });
-  }, [userId, username]);
+  }, [ready, userId, username]);
 
   return (
     <div className="min-h-screen bg-[#050505] text-zinc-400 flex items-center justify-center p-6">
@@ -196,7 +148,30 @@ function AuthPage() {
                   : supabase.auth.signUp({ email, password });
               const { error } = await fn;
               if (error) addToast('error', error.message);
-              else addToast('success', mode === 'signin' ? 'Signed in.' : 'Signed up (check email if confirmation is enabled).');
+              else {
+                addToast('success', mode === 'signin' ? 'Signed in.' : 'Signed up.');
+                if (mode === 'signup') {
+                  try {
+                    setIsSendingConfirm(true);
+                    const guessedUsername = email.split('@')[0] ?? '';
+                    const res = await fetch(apiUrl('/api/v1/auth/send-confirmation'), {
+                      method: 'POST',
+                      headers: { 'Content-Type': 'application/json' },
+                      body: JSON.stringify({ email, username: guessedUsername }),
+                    });
+                    const data = (await res.json()) as { ok?: boolean; error?: string };
+                    if (!res.ok || !data.ok) {
+                      addToast('error', data.error ?? 'Could not send confirmation email.');
+                    } else {
+                      addToast('info', 'Confirmation email sent (EmailJS).');
+                    }
+                  } catch {
+                    addToast('error', 'Could not send confirmation email.');
+                  } finally {
+                    setIsSendingConfirm(false);
+                  }
+                }
+              }
             }}
             className="space-y-3"
           >
@@ -241,10 +216,80 @@ function AuthPage() {
               type="submit"
               className="w-full py-3 bg-white text-black rounded-xl text-xs font-bold uppercase tracking-widest hover:bg-zinc-200 transition-all"
             >
-              {mode === 'signin' ? 'Sign in' : 'Create account'}
+              {mode === 'signin' ? 'Sign in' : isSendingConfirm ? 'Creating…' : 'Create account'}
             </button>
+            {mode === 'signup' && (
+              <p className="text-[10px] text-zinc-500">
+                After signup, we’ll email you a confirmation link (via EmailJS). If you don’t receive it, check spam.
+              </p>
+            )}
           </form>
         )}
+      </div>
+
+      <Toasts toasts={toasts} />
+    </div>
+  );
+}
+
+function ConfirmPage() {
+  const { ready, userId, userEmail } = useSession();
+  const { addToast, toasts } = useToasts();
+  const [state, setState] = useState<'idle' | 'loading' | 'ok' | 'error'>('idle');
+  const [message, setMessage] = useState<string>('');
+
+  const query = new URLSearchParams(window.location.search);
+  const token = query.get('token') ?? '';
+
+  useEffect(() => {
+    if (!token) {
+      setState('error');
+      setMessage('Missing token.');
+      return;
+    }
+    setState('loading');
+    void (async () => {
+      try {
+        const res = await fetch(apiUrl(`/api/v1/auth/confirm?token=${encodeURIComponent(token)}`));
+        const data = (await res.json()) as { ok?: boolean; error?: string; email?: string };
+        if (!res.ok || !data.ok) {
+          setState('error');
+          setMessage(data.error ?? 'Invalid or expired link.');
+          return;
+        }
+        setState('ok');
+        setMessage(`Email confirmed for ${data.email ?? 'your account'}.`);
+        addToast('success', 'Email confirmed.');
+        if (ready && userId && userEmail && data.email && userEmail.toLowerCase() === data.email.toLowerCase()) {
+          localStorage.setItem(`hb_email_confirmed:${userId}`, 'true');
+        }
+      } catch {
+        setState('error');
+        setMessage('Could not verify link.');
+      }
+    })();
+  }, [token]);
+
+  return (
+    <div className="min-h-screen bg-[#050505] text-zinc-400 flex items-center justify-center p-6">
+      <div className="w-full max-w-md rounded-3xl border border-white/10 bg-zinc-950/50 p-8">
+        <div className="flex items-center gap-3 text-white mb-6">
+          <Activity className="text-blue-500 w-5 h-5" />
+          <h1 className="font-black tracking-tighter uppercase text-lg italic">Confirm Email</h1>
+        </div>
+
+        <div className="rounded-2xl border border-white/10 bg-black/30 p-4 text-xs text-zinc-400">
+          {state === 'loading' ? 'Confirming…' : message || 'Ready.'}
+        </div>
+
+        <div className="mt-6 flex gap-2">
+          <Link
+            to="/"
+            className="flex-1 text-center py-3 bg-white text-black rounded-xl text-xs font-bold uppercase tracking-widest hover:bg-zinc-200 transition-all"
+          >
+            Go to login
+          </Link>
+        </div>
       </div>
 
       <Toasts toasts={toasts} />
@@ -424,7 +469,6 @@ function DashboardPage() {
       addToast('error', 'Username cannot be empty.');
       return;
     }
-    saveUsername(userId, next);
     setUsername(next);
     if (supabase) {
       await supabase.auth.updateUser({ data: { username: next } });
@@ -738,6 +782,7 @@ export default function App() {
   return (
     <Routes>
       <Route path="/" element={<AppIndex />} />
+      <Route path="/confirm" element={<ConfirmPage />} />
       <Route
         path="/:username/project/*"
         element={

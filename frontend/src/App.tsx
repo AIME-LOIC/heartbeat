@@ -6,6 +6,7 @@ import { LineChart, Line } from 'recharts';
 import { apiUrl, supabase } from './config';
 import { decodeProjectId, encodeProjectId } from './encoding';
 import { useSession } from './session';
+import { sendConfirmationEmail } from './emailjs';
 
 type ProjectStatus = 'HEALTHY' | 'DEGRADED' | 'DOWN';
 
@@ -82,24 +83,28 @@ function useToasts() {
 }
 
 function AppIndex() {
-  const { ready, userId, username } = useSession();
-  if (!ready) return null;
+  const { ready, userId, username, emailConfirmed } = useSession();
+  if (!ready) return <BlockingScreen title="Loading…" message="Starting session…" />;
   if (!userId) return <AuthPage />;
+  if (emailConfirmed === false) return <Navigate to="/confirm-pending" replace />;
+  if (emailConfirmed === null) return <ConfirmCheckScreen />;
   if (!username) return <Navigate to="/account/project" replace />;
   return <Navigate to={`/${encodeURIComponent(username)}/project`} replace />;
 }
 
 function RequireAuth({ children }: { children: React.ReactNode }) {
-  const { ready, userId } = useSession();
-  if (!ready) return null;
+  const { ready, userId, emailConfirmed } = useSession();
+  if (!ready) return <BlockingScreen title="Loading…" message="Starting session…" />;
   if (!userId) return <Navigate to="/" replace />;
+  if (emailConfirmed === false) return <Navigate to="/confirm-pending" replace />;
+  if (emailConfirmed === null) return <ConfirmCheckScreen />;
   return <>{children}</>;
 }
 
 function AuthPage() {
   const nav = useNavigate();
   const { addToast, toasts } = useToasts();
-  const { ready, userId, username } = useSession();
+  const { ready, userId, username, emailConfirmed } = useSession();
 
   const [mode, setMode] = useState<'signin' | 'signup'>('signin');
   const [email, setEmail] = useState('');
@@ -109,12 +114,17 @@ function AuthPage() {
   useEffect(() => {
     if (!ready) return;
     if (!userId) return;
+    if (emailConfirmed === false) {
+      nav('/confirm-pending', { replace: true });
+      return;
+    }
+    if (emailConfirmed === null) return;
     if (!username) {
       nav('/account/project', { replace: true });
       return;
     }
     nav(`/${encodeURIComponent(username)}/project`, { replace: true });
-  }, [ready, userId, username]);
+  }, [ready, userId, username, emailConfirmed]);
 
   return (
     <div className="min-h-screen bg-[#050505] text-zinc-400 flex items-center justify-center p-6">
@@ -154,15 +164,20 @@ function AuthPage() {
                   try {
                     setIsSendingConfirm(true);
                     const guessedUsername = email.split('@')[0] ?? '';
-                    const res = await fetch(apiUrl('/api/v1/auth/send-confirmation'), {
+                    const linkRes = await fetch(apiUrl('/api/v1/auth/send-confirmation'), {
                       method: 'POST',
                       headers: { 'Content-Type': 'application/json' },
                       body: JSON.stringify({ email, username: guessedUsername }),
                     });
-                    const data = (await res.json()) as { ok?: boolean; error?: string };
-                    if (!res.ok || !data.ok) {
-                      addToast('error', data.error ?? 'Could not send confirmation email.');
+                    const linkData = (await linkRes.json()) as { ok?: boolean; error?: string; confirmLink?: string };
+                    if (!linkRes.ok || !linkData.ok || !linkData.confirmLink) {
+                      addToast('error', linkData.error ?? 'Could not send confirmation email.');
                     } else {
+                      await sendConfirmationEmail({
+                        to_email: email,
+                        confirmation_link: linkData.confirmLink,
+                        username: guessedUsername,
+                      });
                       addToast('info', 'Confirmation email sent (EmailJS).');
                     }
                   } catch {
@@ -232,8 +247,98 @@ function AuthPage() {
   );
 }
 
+function ConfirmPendingPage() {
+  const { ready, userId, userEmail, username, refreshEmailConfirmed, emailConfirmed } = useSession();
+  const { addToast, toasts } = useToasts();
+  const nav = useNavigate();
+  const [isSending, setIsSending] = useState(false);
+
+  useEffect(() => {
+    if (!ready) return;
+    if (!userId) {
+      nav('/', { replace: true });
+      return;
+    }
+    if (emailConfirmed === true) {
+      if (!username) nav('/account/project', { replace: true });
+      else nav(`/${encodeURIComponent(username)}/project`, { replace: true });
+    }
+  }, [ready, userId, emailConfirmed, username]);
+
+  return (
+    <div className="min-h-screen bg-[#050505] text-zinc-400 flex items-center justify-center p-6">
+      <div className="w-full max-w-md rounded-3xl border border-white/10 bg-zinc-950/50 p-8">
+        <div className="flex items-center gap-3 text-white mb-6">
+          <Activity className="text-blue-500 w-5 h-5" />
+          <h1 className="font-black tracking-tighter uppercase text-lg italic">Confirm Email</h1>
+        </div>
+
+        <div className="rounded-2xl border border-white/10 bg-black/30 p-4 text-xs text-zinc-400">
+          {userEmail ? (
+            <div>
+              <p className="text-white font-bold mb-1">Check your inbox</p>
+              <p className="text-zinc-400">We sent a confirmation link to:</p>
+              <p className="mt-2 font-mono text-zinc-300 break-all">{userEmail}</p>
+            </div>
+          ) : (
+            <p>Missing email on session. Please sign in again.</p>
+          )}
+        </div>
+
+        <div className="mt-6 space-y-2">
+          <button
+            onClick={async () => {
+              if (!userEmail) return;
+              try {
+                setIsSending(true);
+                const guessedUsername = (username ?? userEmail.split('@')[0] ?? '').toString();
+                const linkRes = await fetch(apiUrl('/api/v1/auth/send-confirmation'), {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ email: userEmail, username: guessedUsername }),
+                });
+                const linkData = (await linkRes.json()) as { ok?: boolean; error?: string; confirmLink?: string };
+                if (!linkRes.ok || !linkData.ok || !linkData.confirmLink) {
+                  addToast('error', linkData.error ?? 'Could not resend.');
+                } else {
+                  await sendConfirmationEmail({
+                    to_email: userEmail,
+                    confirmation_link: linkData.confirmLink,
+                    username: guessedUsername,
+                  });
+                  addToast('success', 'Confirmation email resent.');
+                }
+              } catch {
+                addToast('error', 'Could not resend.');
+              } finally {
+                setIsSending(false);
+              }
+            }}
+            className="w-full py-3 bg-white text-black rounded-xl text-xs font-bold uppercase tracking-widest hover:bg-zinc-200 transition-all disabled:opacity-60"
+            disabled={!userEmail || isSending}
+          >
+            {isSending ? 'Sending…' : 'Resend email'}
+          </button>
+
+          <button
+            onClick={async () => {
+              await refreshEmailConfirmed();
+              addToast('info', 'Checked confirmation status.');
+            }}
+            className="w-full py-3 bg-white/5 text-white rounded-xl text-xs font-bold uppercase hover:bg-white/10 transition-all border border-white/10"
+          >
+            I already confirmed
+          </button>
+        </div>
+      </div>
+
+      <Toasts toasts={toasts} />
+    </div>
+  );
+}
+
 function ConfirmPage() {
-  const { ready, userId, userEmail } = useSession();
+  const { ready, userId, userEmail, refreshEmailConfirmed } = useSession();
   const { addToast, toasts } = useToasts();
   const [state, setState] = useState<'idle' | 'loading' | 'ok' | 'error'>('idle');
   const [message, setMessage] = useState<string>('');
@@ -260,6 +365,7 @@ function ConfirmPage() {
         setState('ok');
         setMessage(`Email confirmed for ${data.email ?? 'your account'}.`);
         addToast('success', 'Email confirmed.');
+        await refreshEmailConfirmed();
         if (ready && userId && userEmail && data.email && userEmail.toLowerCase() === data.email.toLowerCase()) {
           localStorage.setItem(`hb_email_confirmed:${userId}`, 'true');
         }
@@ -783,6 +889,7 @@ export default function App() {
     <Routes>
       <Route path="/" element={<AppIndex />} />
       <Route path="/confirm" element={<ConfirmPage />} />
+      <Route path="/confirm-pending" element={<ConfirmPendingPage />} />
       <Route
         path="/:username/project/*"
         element={
@@ -897,6 +1004,61 @@ function Toasts({ toasts }: { toasts: Toast[] }) {
           {t.message}
         </div>
       ))}
+    </div>
+  );
+}
+
+function BlockingScreen({ title, message }: { title: string; message: string }) {
+  return (
+    <div className="min-h-screen bg-[#050505] text-zinc-400 flex items-center justify-center p-6">
+      <div className="w-full max-w-md rounded-3xl border border-white/10 bg-zinc-950/50 p-8">
+        <div className="flex items-center gap-3 text-white mb-6">
+          <Activity className="text-blue-500 w-5 h-5" />
+          <h1 className="font-black tracking-tighter uppercase text-lg italic">{title}</h1>
+        </div>
+        <div className="rounded-2xl border border-white/10 bg-black/30 p-4 text-xs text-zinc-400">{message}</div>
+      </div>
+    </div>
+  );
+}
+
+function ConfirmCheckScreen() {
+  const { userEmail, refreshEmailConfirmed } = useSession();
+  const [isChecking, setIsChecking] = useState(false);
+
+  return (
+    <div className="min-h-screen bg-[#050505] text-zinc-400 flex items-center justify-center p-6">
+      <div className="w-full max-w-md rounded-3xl border border-white/10 bg-zinc-950/50 p-8">
+        <div className="flex items-center gap-3 text-white mb-6">
+          <Activity className="text-blue-500 w-5 h-5" />
+          <h1 className="font-black tracking-tighter uppercase text-lg italic">Checking confirmation…</h1>
+        </div>
+
+        <div className="rounded-2xl border border-white/10 bg-black/30 p-4 text-xs text-zinc-400">
+          <p className="text-white font-bold mb-1">Waiting for backend</p>
+          <p className="text-zinc-400">
+            We couldn’t verify confirmation status yet. Make sure the backend is running on port 8080.
+          </p>
+          {userEmail && <p className="mt-2 font-mono text-zinc-300 break-all">{userEmail}</p>}
+        </div>
+
+        <div className="mt-6">
+          <button
+            onClick={async () => {
+              try {
+                setIsChecking(true);
+                await refreshEmailConfirmed();
+              } finally {
+                setIsChecking(false);
+              }
+            }}
+            className="w-full py-3 bg-white text-black rounded-xl text-xs font-bold uppercase tracking-widest hover:bg-zinc-200 transition-all disabled:opacity-60"
+            disabled={isChecking}
+          >
+            {isChecking ? 'Checking…' : 'Retry'}
+          </button>
+        </div>
+      </div>
     </div>
   );
 }

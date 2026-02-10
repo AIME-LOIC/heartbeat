@@ -1,7 +1,9 @@
 package main
 
 import (
+	"crypto/hmac"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/json"
 	"encoding/base64"
 	"fmt"
@@ -32,6 +34,7 @@ type Config struct {
 	ConfirmBaseURL         string
 	ConfirmTokenTTLMinutes int
 	ConfirmTokenSecret     string
+	ConfirmStorePath       string
 
 	EmailJSServiceID  string
 	EmailJSTemplateID string
@@ -41,6 +44,10 @@ type Config struct {
 
 func loadConfig() (Config, error) {
 	loadDotEnvIfPresent(".env")
+	// Allow running from repo root (where backend/.env exists).
+	if _, err := os.Stat(".env"); err != nil {
+		loadDotEnvIfPresent("backend/.env")
+	}
 	cfg := Config{
 		Port:       os.Getenv("PORT"),
 		CORSOrigin: os.Getenv("CORS_ORIGIN"),
@@ -113,6 +120,10 @@ func loadConfig() (Config, error) {
 	cfg.ConfirmTokenSecret = strings.TrimSpace(os.Getenv("CONFIRM_TOKEN_SECRET"))
 	if cfg.ConfirmTokenSecret == "" {
 		cfg.ConfirmTokenSecret = "dev-only-change-me"
+	}
+	cfg.ConfirmStorePath = strings.TrimSpace(os.Getenv("CONFIRM_STORE_PATH"))
+	if cfg.ConfirmStorePath == "" {
+		cfg.ConfirmStorePath = ".confirm_store.json"
 	}
 	ttlStr := strings.TrimSpace(os.Getenv("CONFIRM_TOKEN_TTL_MINUTES"))
 	if ttlStr == "" {
@@ -203,24 +214,21 @@ type Store struct {
 	historyByID     map[string][]CheckResult
 	lastStatusByID  map[string]string
 	incidents       []Incident
-
-	confirmTokens   map[string]ConfirmToken
-	confirmedEmails map[string]time.Time
+	confirmedEmails map[string]int64
+	confirmStorePath string
+	rateBuckets     map[string][]int64
 }
 
-type ConfirmToken struct {
-	Email     string
-	Username  string
-	ExpiresAt time.Time
-}
-
-func NewStore() *Store {
-	return &Store{
+func NewStore(cfg Config) *Store {
+	s := &Store{
 		historyByID:    make(map[string][]CheckResult),
 		lastStatusByID: make(map[string]string),
-		confirmTokens:  make(map[string]ConfirmToken),
-		confirmedEmails: make(map[string]time.Time),
+		confirmedEmails: make(map[string]int64),
+		confirmStorePath: cfg.ConfirmStorePath,
+		rateBuckets:     make(map[string][]int64),
 	}
+	s.loadConfirmedFromDisk()
+	return s
 }
 
 func (s *Store) addCheck(project Project, check CheckResult) *Incident {
@@ -290,80 +298,128 @@ func (s *Store) getIncidents(limit int) []Incident {
 	return out
 }
 
-func (s *Store) createConfirmToken(email string, username string, ttl time.Duration) (string, time.Time, error) {
-	b := make([]byte, 32)
-	if _, err := rand.Read(b); err != nil {
-		return "", time.Time{}, err
+func (s *Store) loadConfirmedFromDisk() {
+	if s.confirmStorePath == "" {
+		return
 	}
-	token := base64.RawURLEncoding.EncodeToString(b)
-	expiresAt := time.Now().Add(ttl)
-
+	b, err := os.ReadFile(s.confirmStorePath)
+	if err != nil {
+		return
+	}
+	var m map[string]int64
+	if err := json.Unmarshal(b, &m); err != nil {
+		return
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.confirmTokens[token] = ConfirmToken{Email: email, Username: username, ExpiresAt: expiresAt}
-	return token, expiresAt, nil
+	for k, v := range m {
+		s.confirmedEmails[strings.ToLower(strings.TrimSpace(k))] = v
+	}
 }
 
-func (s *Store) consumeConfirmToken(token string) (ConfirmToken, bool) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	ct, ok := s.confirmTokens[token]
-	if !ok {
-		return ConfirmToken{}, false
+func (s *Store) persistConfirmedToDiskLocked() {
+	if s.confirmStorePath == "" {
+		return
 	}
-	if time.Now().After(ct.ExpiresAt) {
-		delete(s.confirmTokens, token)
-		return ConfirmToken{}, false
-	}
-	delete(s.confirmTokens, token)
-	s.confirmedEmails[strings.ToLower(ct.Email)] = time.Now()
-	return ct, true
+	tmp := s.confirmStorePath + ".tmp"
+	b, _ := json.MarshalIndent(s.confirmedEmails, "", "  ")
+	_ = os.WriteFile(tmp, b, 0o600)
+	_ = os.Rename(tmp, s.confirmStorePath)
 }
 
 func (s *Store) isConfirmed(email string) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	_, ok := s.confirmedEmails[strings.ToLower(email)]
+	_, ok := s.confirmedEmails[strings.ToLower(strings.TrimSpace(email))]
 	return ok
 }
 
-func sendEmailJSConfirmation(cfg Config, toEmail string, confirmLink string, username string) error {
-	if cfg.EmailJSServiceID == "" || cfg.EmailJSTemplateID == "" || cfg.EmailJSPublicKey == "" {
-		return fmt.Errorf("emailjs is not configured")
-	}
+func (s *Store) markConfirmed(email string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.confirmedEmails[strings.ToLower(strings.TrimSpace(email))] = time.Now().UnixMilli()
+	s.persistConfirmedToDiskLocked()
+}
 
-	payload := map[string]any{
-		"service_id":  cfg.EmailJSServiceID,
-		"template_id": cfg.EmailJSTemplateID,
-		"user_id":     cfg.EmailJSPublicKey,
-		"template_params": map[string]string{
-			"to_email":           toEmail,
-			"confirmation_link":  confirmLink,
-			"username":           username,
-		},
-	}
+func (s *Store) allowAction(key string, window time.Duration, limit int) bool {
+	now := time.Now().UnixMilli()
+	cutoff := now - window.Milliseconds()
 
-	body, _ := json.Marshal(payload)
-	req, err := http.NewRequest("POST", "https://api.emailjs.com/api/v1.0/email/send", strings.NewReader(string(body)))
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	items := s.rateBuckets[key]
+	filtered := items[:0]
+	for _, ts := range items {
+		if ts >= cutoff {
+			filtered = append(filtered, ts)
+		}
+	}
+	if len(filtered) >= limit {
+		s.rateBuckets[key] = filtered
+		return false
+	}
+	filtered = append(filtered, now)
+	s.rateBuckets[key] = filtered
+	return true
+}
+
+type ConfirmTokenPayload struct {
+	Email    string `json:"email"`
+	Username string `json:"username"`
+	Exp      int64  `json:"exp"`
+	Nonce    string `json:"nonce"`
+}
+
+func randomNonce() (string, error) {
+	b := make([]byte, 12)
+	if _, err := rand.Read(b); err != nil {
+		return "", err
+	}
+	return base64.RawURLEncoding.EncodeToString(b), nil
+}
+
+func signConfirmToken(secret string, payload ConfirmTokenPayload) (string, error) {
+	raw, err := json.Marshal(payload)
 	if err != nil {
-		return err
+		return "", err
 	}
-	req.Header.Set("Content-Type", "application/json")
-	if cfg.EmailJSPrivateKey != "" {
-		// Some EmailJS setups use a private key/bearer token for server-side calls.
-		req.Header.Set("Authorization", "Bearer "+cfg.EmailJSPrivateKey)
-	}
+	msg := base64.RawURLEncoding.EncodeToString(raw)
+	mac := hmac.New(sha256.New, []byte(secret))
+	mac.Write([]byte(msg))
+	sig := base64.RawURLEncoding.EncodeToString(mac.Sum(nil))
+	return msg + "." + sig, nil
+}
 
-	client := &http.Client{Timeout: 8 * time.Second}
-	resp, err := client.Do(req)
+func verifyConfirmToken(secret string, token string) (ConfirmTokenPayload, bool) {
+	parts := strings.Split(token, ".")
+	if len(parts) != 2 {
+		return ConfirmTokenPayload{}, false
+	}
+	msg := parts[0]
+	sig := parts[1]
+	mac := hmac.New(sha256.New, []byte(secret))
+	mac.Write([]byte(msg))
+	want := mac.Sum(nil)
+	got, err := base64.RawURLEncoding.DecodeString(sig)
+	if err != nil || !hmac.Equal(want, got) {
+		return ConfirmTokenPayload{}, false
+	}
+	raw, err := base64.RawURLEncoding.DecodeString(msg)
 	if err != nil {
-		return err
+		return ConfirmTokenPayload{}, false
 	}
-	defer resp.Body.Close()
-	if resp.StatusCode >= 400 {
-		return fmt.Errorf("emailjs returned status %d", resp.StatusCode)
+	var p ConfirmTokenPayload
+	if err := json.Unmarshal(raw, &p); err != nil {
+		return ConfirmTokenPayload{}, false
 	}
-	return nil
+	if p.Exp <= 0 || time.Now().Unix() > p.Exp {
+		return ConfirmTokenPayload{}, false
+	}
+	if strings.TrimSpace(p.Email) == "" {
+		return ConfirmTokenPayload{}, false
+	}
+	return p, true
 }
 
 func doWebhook(cfg Config, incident Incident) {
@@ -478,7 +534,7 @@ func main() {
 
 	r := gin.Default()
 	r.Use(CORSMiddleware(cfg.CORSOrigin))
-	store := NewStore()
+	store := NewStore(cfg)
 
 	r.GET("/", func(c *gin.Context) {
 		c.JSON(200, gin.H{
@@ -542,8 +598,29 @@ func main() {
 			return
 		}
 
-		ttl := time.Duration(cfg.ConfirmTokenTTLMinutes) * time.Minute
-		token, expiresAt, err := store.createConfirmToken(email, username, ttl)
+		// Basic rate limiting to reduce abuse when EmailJS is called from the browser.
+		ip := c.ClientIP()
+		if !store.allowAction("confirm:ip:"+ip, 1*time.Minute, 10) {
+			c.JSON(429, gin.H{"ok": false, "error": "too many requests"})
+			return
+		}
+		if !store.allowAction("confirm:email:"+strings.ToLower(email), 10*time.Minute, 5) {
+			c.JSON(429, gin.H{"ok": false, "error": "too many requests"})
+			return
+		}
+
+		nonce, err := randomNonce()
+		if err != nil {
+			c.JSON(500, gin.H{"error": "could not create token"})
+			return
+		}
+		exp := time.Now().Add(time.Duration(cfg.ConfirmTokenTTLMinutes) * time.Minute).Unix()
+		token, err := signConfirmToken(cfg.ConfirmTokenSecret, ConfirmTokenPayload{
+			Email:    email,
+			Username: username,
+			Exp:      exp,
+			Nonce:    nonce,
+		})
 		if err != nil {
 			c.JSON(500, gin.H{"error": "could not create token"})
 			return
@@ -552,11 +629,8 @@ func main() {
 		if username != "" {
 			confirmLink += "&username=" + url.QueryEscape(username)
 		}
-		if err := sendEmailJSConfirmation(cfg, email, confirmLink, username); err != nil {
-			c.JSON(500, gin.H{"error": err.Error()})
-			return
-		}
-		c.JSON(200, gin.H{"ok": true, "expiresAt": expiresAt.UnixMilli()})
+		// The browser sends via EmailJS (EmailJS blocks non-browser apps on some accounts).
+		c.JSON(200, gin.H{"ok": true, "expiresAt": exp, "confirmLink": confirmLink})
 	})
 
 	r.GET("/api/v1/auth/confirm", func(c *gin.Context) {
@@ -565,11 +639,12 @@ func main() {
 			c.JSON(400, gin.H{"error": "token is required"})
 			return
 		}
-		ct, ok := store.consumeConfirmToken(token)
+		ct, ok := verifyConfirmToken(cfg.ConfirmTokenSecret, token)
 		if !ok {
 			c.JSON(400, gin.H{"ok": false, "error": "invalid or expired token"})
 			return
 		}
+		store.markConfirmed(ct.Email)
 		c.JSON(200, gin.H{"ok": true, "email": ct.Email, "username": ct.Username})
 	})
 

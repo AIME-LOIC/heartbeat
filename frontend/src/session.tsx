@@ -1,12 +1,15 @@
 import React, { createContext, useContext, useEffect, useMemo, useState } from 'react';
 import { supabase } from './config';
+import { apiUrl } from './config';
 
 type SessionState = {
   ready: boolean;
   userId: string | null;
   userEmail: string | null;
   username: string | null;
+  emailConfirmed: boolean | null;
   setUsername: (u: string | null) => void;
+  refreshEmailConfirmed: () => Promise<void>;
 };
 
 function getUsernameFromEmail(email: string | null | undefined): string | null {
@@ -35,6 +38,25 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
   const [userId, setUserId] = useState<string | null>(null);
   const [userEmail, setUserEmail] = useState<string | null>(null);
   const [username, setUsernameState] = useState<string | null>(null);
+  const [emailConfirmed, setEmailConfirmed] = useState<boolean | null>(null);
+
+  const refreshEmailConfirmed = async () => {
+    if (!userEmail) {
+      setEmailConfirmed(null);
+      return;
+    }
+    try {
+      const res = await fetch(apiUrl(`/api/v1/auth/is-confirmed?email=${encodeURIComponent(userEmail)}`));
+      const data = (await res.json()) as { confirmed?: boolean };
+      if (!res.ok) {
+        setEmailConfirmed(null);
+        return;
+      }
+      setEmailConfirmed(Boolean(data.confirmed));
+    } catch {
+      setEmailConfirmed(null);
+    }
+  };
 
   useEffect(() => {
     if (!supabase) {
@@ -51,6 +73,8 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
       const fromLocal = user?.id ? loadUsername(user.id) : null;
       const fromEmail = getUsernameFromEmail(user?.email);
       setUsernameState(fromMeta ?? fromLocal ?? fromEmail);
+      setEmailConfirmed(null);
+      if (user?.email) void refreshEmailConfirmed();
       setReady(true);
     });
 
@@ -63,6 +87,8 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
       const fromLocal = user?.id ? loadUsername(user.id) : null;
       const fromEmail = getUsernameFromEmail(user?.email);
       setUsernameState(fromMeta ?? fromLocal ?? fromEmail);
+      setEmailConfirmed(null);
+      if (user?.email) void refreshEmailConfirmed();
       setReady(true);
     });
     return () => data.subscription.unsubscribe();
@@ -74,8 +100,8 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
   };
 
   const value = useMemo<SessionState>(
-    () => ({ ready, userId, userEmail, username, setUsername }),
-    [ready, userId, userEmail, username],
+    () => ({ ready, userId, userEmail, username, emailConfirmed, setUsername, refreshEmailConfirmed }),
+    [ready, userId, userEmail, username, emailConfirmed],
   );
 
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
@@ -86,4 +112,3 @@ export function useSession(): SessionState {
   if (!v) throw new Error('SessionProvider missing');
   return v;
 }
-
